@@ -31,9 +31,9 @@
 // initialize the library with the numbers of the interface pins
 LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
 
-const long second = 1000;
-const long minute = 60000;    // number of millis in a minute
-const long hour = 3600000;    // number of millis in an hour
+const unsigned long second = 1000;
+const unsigned long minute = 60000;    // number of millis in a minute
+const unsigned long hour = 3600000;    // number of millis in an hour
 
 int userResetPin = 13;        // pin used for resetting user laser time
 int analogPin = 0;           // light sensor input (or voltsge) connected to analog pin 0
@@ -41,27 +41,28 @@ int analogVal = 0;           // variable to store the value read
 int anaLowThreshold = 1000;   // if analog value rises above this value its considered ON
 int anaHighThreshold = 1010;  // if analog value falls below this value its considered OFF
 int cursorPos = 0;
-long millisOnLast = 0;
-long millisOffLast = 0;
-long millisTemp = 0;
-long millisDiff = 0;
+unsigned long millisOnLast = 0;
+unsigned long millisOffLast = 0;
+unsigned long millisTemp = 0;
+unsigned long millisDiff = 0;
 boolean lastLaserOn = false;
-long userMillis = 0;
+unsigned long userMillis = 0;
 int userHours = 0;
 int userMinutes = 0;        // number of minutes user has used the laser (resettable when button pressed)
 int userSeconds = 0;
 int tubeHours = 0;
 int tubeMinutes = 0;        // number of minutes tube has been used (not resettable)
 int tubeSeconds = 0;
-long tubeMillis = 0;        
+unsigned long tubeMillis = 0;        
+unsigned long lastWriteToEEPROMMillis = 0;   // number of millis that the EEPROM was laser written to
 
 char   buffer[MAX_OUT_CHARS];  //buffer used to format a line (+1 is for trailing 0)
 char   buffer2[MAX_OUT_CHARS];  //buffer used to format a line (+1 is for trailing 0)
 
 struct config_t
 {
-    long seconds;
-    long uSeconds;
+    unsigned long seconds;
+    unsigned long uSeconds;
 } laserTime;
 
 void setup() {
@@ -85,16 +86,22 @@ void loop() {
     analogVal = analogRead(analogPin);    // read the input pin
 //    Serial.print("anaVal:");
 //    Serial.println(analogVal);
-    if (analogVal <  anaLowThreshold) {
+    if ((analogVal <  anaLowThreshold) && !lastLaserOn) {     // laser has been off, laser turning on here
+      lastLaserOn = true;
+      millisOnLast = (unsigned long) millis();
+      millisDiff = millisOnLast - millisOffLast;
+    } else if ((analogVal <  anaLowThreshold) && lastLaserOn) {   // laser has been on here, continuing on
       lastLaserOn = true;
 
-      millisTemp = (long) millis();
+      millisTemp = (unsigned long) millis();
       millisDiff = millisTemp-millisOnLast;
-      millisOnLast = millisTemp;
-    }
-    if (analogVal > anaHighThreshold) {
+      millisOnLast = millisTemp;      
+    } else if ((analogVal > anaHighThreshold) && lastLaserOn) {  // laser has been on, turning off
       lastLaserOn = false;
-      millisOffLast = (long) millis();
+      millisOffLast = (unsigned long) millis();
+    } else {             // laser has been off, staying off
+      lastLaserOn = false;
+      millisOffLast = (unsigned long) millis();
     }
     int userReset = digitalRead(userResetPin);
     if (userReset == HIGH) {
@@ -120,7 +127,7 @@ void loop() {
   // Only write to EEPROM if the current value is more than 5 minutes from the previous EEPROM value
   // to reduce the number of writes to EEPROM, since it is only good for 100,000 writes
   EEPROM_readAnything(0, laserTime);
-  long laserSeconds = laserTime.seconds;
+  unsigned long laserSeconds = laserTime.seconds;
   if ((laserSeconds+300) < (tubeMillis/1000)) {    
     Serial.print("LaserSeconds:");
     Serial.print(laserSeconds);
@@ -129,8 +136,16 @@ void loop() {
     laserTime.seconds = tubeMillis/1000;
     laserTime.uSeconds = userMillis/1000;
     EEPROM_writeAnything(0, laserTime);
+    lastWriteToEEPROMMillis = millis();
     Serial.println("Wrote to EEPROM");
   }  
+  if ((millis() > (lastWriteToEEPROMMillis+300000)) && ((laserSeconds+1)*1000 < tubeMillis)) { // if it has been 5 mins since last write and the value has changed, write now
+    laserTime.seconds = tubeMillis/1000;
+    laserTime.uSeconds = userMillis/1000;
+    EEPROM_writeAnything(0, laserTime);
+    lastWriteToEEPROMMillis = millis();
+    Serial.println("Wrote to EEPROM");
+  }
   lcd.setCursor(0,0);
   lcd.print(buffer);
 //  Serial.println(buffer);
